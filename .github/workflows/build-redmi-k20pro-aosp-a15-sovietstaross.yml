@@ -140,46 +140,61 @@ jobs:
           set -euo pipefail
           cd "$GITHUB_WORKSPACE/device_kernel"
 
-          # 1. 修复 fair.c 缺失的 se_update_runnable 调用（保持你验证过的原样）
+          # 1. 修复 fair.c 缺失的 se_update_runnable 调用（保持原样）
           sed -i '/se_update_runnable(se);/s/^/\/\//' kernel/sched/fair.c
-          
-          # 2. 清理 fs/stat.c 里被重复插入的 ksu_handle_stat，只在 newfstatat 里保留一处
+
+          # 2. 清理 fs/stat.c 里被 KSU 补丁插入的 ksu_handle_stat 调用
+          #    原因：ksu_handle_stat 签名是 (int*, struct filename**, int*)，
+          #    而 newfstatat 里的 filename 类型是 const char __user *，
+          #    直接传 &filename 会因指针类型不兼容而编译失败（-Werror）。
+          #    这里只删除不重新插入，避免破坏 #if/#endif 预处理块。
           python3 - <<'PY'
-          import re
+          import re, sys
           path = 'fs/stat.c'
-          s = open(path).read()
-          
-          # 删除所有调用行（extern 声明不动）
-          s = re.sub(r'^[ \t]*ksu_handle_stat\(&dfd, &filename, &flag\);[ \t]*\n', '', s, flags=re.M)
-          
-          # 在 newfstatat 内、vfs_fstatat 调用之前插入一处
-          m = re.search(r'SYSCALL_DEFINE4\(newfstatat,', s)
-          if not m:
-              raise SystemExit('newfstatat not found in fs/stat.c')
-          v = s.find('vfs_fstatat(', m.start())
-          if v < 0:
-              raise SystemExit('vfs_fstatat not found after newfstatat')
-          line_start = s.rfind('\n', 0, v) + 1
-          s = s[:line_start] + '\tksu_handle_stat(&dfd, &filename, &flag);\n' + s[line_start:]
-          
-          open(path, 'w').write(s)
-          print('fs/stat.c: kept exactly one ksu_handle_stat inside newfstatat')
+          try:
+              s = open(path, encoding='utf-8').read()
+          except FileNotFoundError:
+              sys.exit(f'{path}: not found')
+
+          # 删除所有 ksu_handle_stat(...) 调用行（含前导缩进、行尾换行，兼容 CRLF）
+          new_s, n = re.subn(
+              r'^[ \t]*ksu_handle_stat\([^)\n]*\);[ \t]*\r?\n',
+              '', s, flags=re.M,
+          )
+          if n == 0:
+              print('fs/stat.c: no ksu_handle_stat call found, nothing to do')
+          else:
+              print(f'fs/stat.c: removed {n} ksu_handle_stat call(s)')
+
+          # 若之前插入留下孤立 extern 声明，一并清掉（无引用时 clang 不会抱怨，
+          # 但为保险起见还是剔除它）
+          new_s = re.sub(
+              r'^[ \t]*extern[ \t]+int[ \t]+ksu_handle_stat\([^;\n]*\);[ \t]*\r?\n',
+              '', new_s, flags=re.M,
+          )
+
+          open(path, 'w', encoding='utf-8').write(new_s)
           PY
-          
-          # 3. 添加 rtl8188eus WiFi 驱动（原样）
-          git clone --depth=1 --branch master https://github.com/Geeeeeker/android_kernel_xiaomi_sdm845.git rtl8188eus-repo
+
+          # 3. 添加 rtl8188eus WiFi 驱动（保持原样）
+          git clone --depth=1 --branch master \
+            https://github.com/Geeeeeker/android_kernel_xiaomi_sdm845.git rtl8188eus-repo
           if [ -d "rtl8188eus-repo/drivers/rtl8188eus" ]; then
             cp -r rtl8188eus-repo/drivers/rtl8188eus drivers/
             echo 'obj-$(CONFIG_RTL8188EU) += rtl8188eus/' >> drivers/Makefile
             echo 'source "drivers/rtl8188eus/Kconfig"' >> drivers/Kconfig
           else
-          
-          grep -n 'ksu_handle_stat' fs/stat.c
             echo "Error: rtl8188eus directory not found"
             exit 1
           fi
           rm -rf rtl8188eus-repo
 
+          # 4. 校验：stat.c 里不应再有 ksu_handle_stat 引用
+          if grep -n 'ksu_handle_stat' fs/stat.c; then
+            echo "Warning: ksu_handle_stat still present in fs/stat.c"
+          else
+            echo "OK: fs/stat.c has no ksu_handle_stat reference"
+          fi
         env:
           KERNEL_DIR: ${{ github.workspace }}/device_kernel
           ARCH: arm64
