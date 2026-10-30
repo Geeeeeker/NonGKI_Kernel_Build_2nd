@@ -107,99 +107,52 @@ jobs:
       - name: ⏰ Checkout repository
         uses: actions/checkout@v6
 
-      - name: 🔑 Validate SYNC_REPO
-        run: |
-          set -euo pipefail
-          TOKEN="${{ secrets.SYNC_REPO }}"
-          TARGET_REPO="Geeeeeker/kernel_xiaomi_raphael-pixel"
-
-          if [ -z "$TOKEN" ]; then
-            echo "::error::SYNC_REPO secret is empty or not configured."
-            exit 1
-          fi
-
-          # 1) 验证 Token 本身有效（GET /user 返回 200 即为有效）
-          USER_CODE=$(curl -sS -o /tmp/gh_user.json -w "%{http_code}" \
-            -H "Authorization: Bearer $TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            https://api.github.com/user || true)
-
-          if [ "$USER_CODE" != "200" ]; then
-            echo "::error::SYNC_REPO invalid (HTTP $USER_CODE)."
-            cat /tmp/gh_user.json || true
-            exit 1
-          fi
-
-          LOGIN=$(python3 -c "import json;print(json.load(open('/tmp/gh_user.json')).get('login','?'))")
-          echo "[+] Token valid, authenticated as: $LOGIN"
-
-          # 2) 验证对目标仓库有访问权限
-          REPO_CODE=$(curl -sS -o /tmp/gh_repo.json -w "%{http_code}" \
-            -H "Authorization: Bearer $TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/$TARGET_REPO" || true)
-
-          if [ "$REPO_CODE" != "200" ]; then
-            echo "::error::Cannot access target repo $TARGET_REPO (HTTP $REPO_CODE). Token lacks repo scope."
-            cat /tmp/gh_repo.json || true
-            exit 1
-          fi
-
-          # 3) 验证 Token 对目标仓库拥有 push 权限
-          PUSH_OK=$(python3 -c "import json;print(json.load(open('/tmp/gh_repo.json')).get('permissions',{}).get('push',False))")
-          if [ "$PUSH_OK" != "True" ]; then
-            echo "::error::SYNC_REPO lacks push permission on $TARGET_REPO."
-            python3 -c "import json;print('permissions =', json.load(open('/tmp/gh_repo.json')).get('permissions',{}))"
-            exit 1
-          fi
-
-          echo "[+] Token has push permission to $TARGET_REPO."
-          
-      - name: ⌛️ Compilation environment preparation
-        uses: ./.github/workflows/build-env
-
-      - name: ⚙️ Get necessary tools
-        uses: ./.github/workflows/build-ready
-
-      - name: 🪝 Patch Kernel of SUSFS
-        uses: ./.github/workflows/patch-susfs
-
-      - name: 🔗 Patch for no-kprobe
-        uses: ./.github/workflows/patch-no-kprobe
-
-      - name: 🪛 Extra Kernel Options
-        run: |
-          # Only ${{ env.DEVICE_NAME }} use it.
-          cd $GITHUB_WORKSPACE/device_kernel
-          # Nothing
-
-      - name: 🧰 Patch Kernel of Re:Kernel
-        uses: ./.github/workflows/patch-rekernel
-
-      - name: 💿 Patch Kernel of Droidspaces
-        uses: ./.github/workflows/patch-droidspaces
-
-      - name: 🔒 Patch Kernel of Baseband Guard
-        uses: ./.github/workflows/patch-baseband-guard
-
-      - name: 🛡️ Patch Kernel of NoMount
-        uses: ./.github/workflows/patch-nomount
-
       - name: 🔄 Sync patched source to fork
         run: |
           set -euo pipefail
-          cd "$GITHUB_WORKSPACE/device_kernel"
+          KERNEL_DIR="${{ github.workspace }}/device_kernel"
+
+          # ① 先下载源码：若目录不存在（或不是 git 仓库），从 KERNEL_SOURCE clone
+          if [ ! -d "$KERNEL_DIR/.git" ]; then
+            echo "[+] Kernel source not found, cloning ${{ env.KERNEL_SOURCE }} (${{ env.KERNEL_BRANCH }}) ..."
+            rm -rf "$KERNEL_DIR"
+            git clone --depth=1 -b "${{ env.KERNEL_BRANCH }}" \
+              "${{ env.KERNEL_SOURCE }}" "$KERNEL_DIR"
+          else
+            echo "[+] Kernel source already present at $KERNEL_DIR"
+          fi
+
+          cd "$KERNEL_DIR"
 
           # 配置 Git 身份
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # 添加（或刷新）指向 fork 的 remote，用 PAT 认证
+          # ② 清理源码根目录的所有符号链接（快捷方式）
+          #    目的：避免 KernelSU / AnyKernel3 / NonGKI_Kernel_Patches 等 symlink 被同步回 fork
+          echo "[+] Removing symlinks at source root ..."
+
+          # 2a. 删除根目录下一层的所有 symlink（含悬空链接）
+          find . -maxdepth 1 -type l -print -delete || true
+
+          # 2b. 显式兜底删除已知快捷方式及悬空的 drivers/kernelsu
+          rm -rf KernelSU AnyKernel3 NonGKI_Kernel_Patches drivers/kernelsu 2>/dev/null || true
+
+          # 2c. 从 Git 索引中移除已被跟踪的 symlink（防止后续 git checkout / stash 把它们恢复）
+          if git ls-files -s | grep -q '^120000 '; then
+            git ls-files -s | grep '^120000 ' | cut -f2- | \
+              xargs -r git rm --cached --ignore-unmatch
+            echo "[+] Removed tracked symlinks from git index."
+          else
+            echo "[+] No tracked symlinks in git index."
+          fi
+
+          # ③ 添加（或刷新）指向 fork 的 remote，用 PAT 认证
           git remote remove sync-origin 2>/dev/null || true
           git remote add sync-origin \
             "https://x-access-token:${{ secrets.SYNC_REPO }}@github.com/Geeeeeker/kernel_xiaomi_raphael-pixel.git"
 
-          # 暂存所有改动：补丁结果、用户修改、rtl8188eus 驱动等
+          # 暂存所有改动：补丁结果、用户修改、symlink 删除记录等
           git add -A
           if git diff --cached --quiet; then
             echo "No changes to commit (source already matches upstream fork)."
