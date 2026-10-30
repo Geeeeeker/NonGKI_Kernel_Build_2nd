@@ -104,6 +104,14 @@ jobs:
     steps:
       - name: ⏰ Checkout repository
         uses: actions/checkout@v6
+        with:
+          ref: mainline
+
+      - name: 🔍 Debug Patches
+        run: |
+          ls -la
+          ls -la Patches 2>&1 || echo "Patches NOT FOUND"
+          git ls-files Patches/ | head -20
 
       - name: ⌛️ Compilation environment preparation
         uses: ./.github/workflows/build-env
