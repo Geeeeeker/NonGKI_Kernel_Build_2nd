@@ -12,11 +12,11 @@ env:
   CUSTOM_CMDS : "CLANG_TRIPLE=aarch64-linux-gnu-"
   EXTRA_CMDS : "LLVM=1 LLVM_IAS=1"
 
-  KERNEL_SOURCE : "https://github.com/Geeeeeker/kernel_xiaomi_raphael-pixel.git"
-  KERNEL_BRANCH : "16.0"
+  #KERNEL_SOURCE : "https://github.com/Geeeeeker/kernel_xiaomi_raphael-pixel.git"
+  #KERNEL_BRANCH : "16.0"
 
-  #   KERNEL_SOURCE : "https://github.com/Geeeeeker/android_kernel_xiaomi_sm8150-5.4.git"
-  #   KERNEL_BRANCH : "MI_RAPHAEL_5.4"
+  KERNEL_SOURCE : "https://github.com/Geeeeeker/android_kernel_xiaomi_sm8150-5.4.git"
+  KERNEL_BRANCH : "MI_RAPHAEL_5.4"
 
   CLANG_SOURCE : "https://raw.githubusercontent.com/Neutron-Toolchains/antman/main/antman"
   CLANG_BRANCH : ""
@@ -45,8 +45,8 @@ env:
   AK3_BRANCH : "main"
 
   # 打包 boot.img 用的源镜像
-  BOOT_SOURCE : "https://github.com/Geeeeeker/KernelSU_Kernel_Raphael/raw/refs/heads/a17-5.4-resukisu/boot/boot-lineage-raphael.img"
-#  BOOT_SOURCE : "https://github.com/Geeeeeker/boot/releases/download/lineage-24-raphael-20261029-134503/boot.img"
+  #BOOT_SOURCE : "https://github.com/Geeeeeker/KernelSU_Kernel_Raphael/raw/refs/heads/a17-5.4-resukisu/boot/boot-lineage-raphael.img"
+  BOOT_SOURCE : "https://github.com/Geeeeeker/boot/releases/download/lineage-24-raphael-20261029-134503/boot.img"
   NEED_DTBO : false
   NEED_SAFE_DTBO : false
 
