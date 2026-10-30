@@ -12,11 +12,11 @@ env:
   CUSTOM_CMDS : "CLANG_TRIPLE=aarch64-linux-gnu-"
   EXTRA_CMDS : "LLVM=1 LLVM_IAS=1"
 
-  #KERNEL_SOURCE : "https://github.com/Geeeeeker/kernel_xiaomi_raphael-pixel.git"
-  #KERNEL_BRANCH : "16.0"
+  KERNEL_SOURCE : "https://github.com/Geeeeeker/kernel_xiaomi_raphael-pixel.git"
+  KERNEL_BRANCH : "16.0"
 
-  KERNEL_SOURCE : "https://github.com/Geeeeeker/android_kernel_xiaomi_sm8150-5.4.git"
-  KERNEL_BRANCH : "MI_RAPHAEL_5.4"
+#  KERNEL_SOURCE : "https://github.com/Geeeeeker/android_kernel_xiaomi_sm8150-5.4.git"
+#  KERNEL_BRANCH : "MI_RAPHAEL_5.4"
 
   CLANG_SOURCE : "https://raw.githubusercontent.com/Neutron-Toolchains/antman/main/antman"
   CLANG_BRANCH : ""
@@ -45,8 +45,8 @@ env:
   AK3_BRANCH : "main"
 
   # 打包 boot.img 用的源镜像
-  #BOOT_SOURCE : "https://github.com/Geeeeeker/KernelSU_Kernel_Raphael/raw/refs/heads/a17-5.4-resukisu/boot/boot-lineage-raphael.img"
-  BOOT_SOURCE : "https://github.com/Geeeeeker/boot/releases/download/lineage-24-raphael-20261029-134503/boot.img"
+  BOOT_SOURCE : "https://github.com/Geeeeeker/KernelSU_Kernel_Raphael/raw/refs/heads/a17-5.4-resukisu/boot/boot-lineage-raphael.img"
+  #BOOT_SOURCE : "https://github.com/Geeeeeker/boot/releases/download/lineage-24-raphael-20261029-134503/boot.img"
   NEED_DTBO : false
   NEED_SAFE_DTBO : false
 
@@ -140,7 +140,7 @@ jobs:
           set -euo pipefail
           cd "$GITHUB_WORKSPACE/device_kernel"
 
-          # 添加 rtl8188eus WiFi 驱动（原样）
+          # ---------- rtl8188eus WiFi driver ----------
           git clone --depth=1 --branch master https://github.com/Geeeeeker/android_kernel_xiaomi_sdm845.git rtl8188eus-repo
           if [ -d "rtl8188eus-repo/drivers/rtl8188eus" ]; then
             cp -r rtl8188eus-repo/drivers/rtl8188eus drivers/
@@ -153,9 +153,6 @@ jobs:
           fi
           rm -rf rtl8188eus-repo
 
-          # 4. 修复 rtl8188eus 在 clang -Werror 下触发的 -Wparentheses-equality
-          #    原因：usb_halinit.c 里 if ((IS_FULL_SPEED_USB(Adapter)) ... 多包了一层括号，
-          #    该驱动是第三方老代码，直接对其目录关闭该警告最安全。
           if [ -f drivers/rtl8188eus/Makefile ]; then
             if ! grep -q 'Wno-parentheses-equality' drivers/rtl8188eus/Makefile; then
               cat >> drivers/rtl8188eus/Makefile <<'EOF'
@@ -170,6 +167,53 @@ jobs:
             fi
           else
             echo "rtl8188eus: Makefile not found, skip warning suppression"
+          fi
+
+          # ---------- Android 16 专用修复 ----------
+          # Android 17 已编译通过，不需要下面两段；用 KERNEL_BRANCH 前缀区分。
+          if [[ "${KERNEL_BRANCH:-}" == 16* ]]; then
+            echo "[*] applying Android 16 kernel fixes (KERNEL_BRANCH=${KERNEL_BRANCH})"
+
+            # 1. fair.c：注释掉缺失的 se_update_runnable 调用
+            if [ -f kernel/sched/fair.c ]; then
+              if grep -qE '^[[:space:]]*//[[:space:]]*se_update_runnable\(se\);' kernel/sched/fair.c; then
+                echo "[*] fair.c: se_update_runnable already commented, skipping"
+              else
+                sed -i '/^[[:space:]]*se_update_runnable(se);/s|^\([[:space:]]*\)|\1//|' kernel/sched/fair.c
+                echo "[+] fair.c: commented out se_update_runnable(se);"
+              fi
+            else
+              echo "[!] kernel/sched/fair.c not found, skipping fair.c fix"
+            fi
+
+            # 2. fs/stat.c：去重 ksu_handle_stat，只在 newfstatat 内保留一处
+            if [ -f fs/stat.c ] && grep -q 'ksu_handle_stat' fs/stat.c; then
+              python3 - <<'PY'
+          import re
+          path = 'fs/stat.c'
+          s = open(path).read()
+
+          # 删除所有调用行（extern 声明不动）
+          s = re.sub(r'^[ \t]*ksu_handle_stat\(&dfd, &filename, &flag\);[ \t]*\n', '', s, flags=re.M)
+
+          # 在 newfstatat 内、vfs_fstatat 调用之前插入一处
+          m = re.search(r'SYSCALL_DEFINE4\(newfstatat,', s)
+          if not m:
+              raise SystemExit('newfstatat not found in fs/stat.c')
+          v = s.find('vfs_fstatat(', m.start())
+          if v < 0:
+              raise SystemExit('vfs_fstatat not found after newfstatat')
+          line_start = s.rfind('\n', 0, v) + 1
+          s = s[:line_start] + '\tksu_handle_stat(&dfd, &filename, &flag);\n' + s[line_start:]
+
+          open(path, 'w').write(s)
+          print('fs/stat.c: kept exactly one ksu_handle_stat inside newfstatat')
+          PY
+            else
+              echo "[!] fs/stat.c missing or has no ksu_handle_stat, skipping stat.c dedup"
+            fi
+          else
+            echo "[*] KERNEL_BRANCH=${KERNEL_BRANCH:-<unset>} is not 16.x, skipping Android 16 fixes"
           fi
         env:
           KERNEL_DIR: ${{ github.workspace }}/device_kernel
