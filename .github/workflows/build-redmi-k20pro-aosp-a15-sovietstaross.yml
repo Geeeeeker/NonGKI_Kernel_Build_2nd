@@ -14,7 +14,7 @@ env:
 
   KERNEL_SOURCE : "https://github.com/Geeeeeker/kernel_xiaomi_raphael-pixel.git"
   KERNEL_BRANCH : "16.0"
-  
+
   #   KERNEL_SOURCE : "https://github.com/Geeeeeker/android_kernel_xiaomi_sm8150-5.4.git"
   #   KERNEL_BRANCH : "MI_RAPHAEL_5.4"
 
@@ -104,14 +104,6 @@ jobs:
     steps:
       - name: ⏰ Checkout repository
         uses: actions/checkout@v6
-        with:
-          ref: mainline
-
-      - name: 🔍 Debug Patches
-        run: |
-          ls -la
-          ls -la Patches 2>&1 || echo "Patches NOT FOUND"
-          git ls-files Patches/ | head -20
 
       - name: ⌛️ Compilation environment preparation
         uses: ./.github/workflows/build-env
@@ -144,7 +136,41 @@ jobs:
         uses: ./.github/workflows/patch-nomount
 
       - name: 🧩 Apply user kernel modifications
-        run: bash "$GITHUB_WORKSPACE/Patches/user.sh"
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/device_kernel"
+
+          # 添加 rtl8188eus WiFi 驱动（原样）
+          git clone --depth=1 --branch master https://github.com/Geeeeeker/android_kernel_xiaomi_sdm845.git rtl8188eus-repo
+          if [ -d "rtl8188eus-repo/drivers/rtl8188eus" ]; then
+            cp -r rtl8188eus-repo/drivers/rtl8188eus drivers/
+            echo 'obj-$(CONFIG_RTL8188EU) += rtl8188eus/' >> drivers/Makefile
+            echo 'source "drivers/rtl8188eus/Kconfig"' >> drivers/Kconfig
+          else
+            grep -n 'ksu_handle_stat' fs/stat.c
+            echo "Error: rtl8188eus directory not found"
+            exit 1
+          fi
+          rm -rf rtl8188eus-repo
+
+          # 4. 修复 rtl8188eus 在 clang -Werror 下触发的 -Wparentheses-equality
+          #    原因：usb_halinit.c 里 if ((IS_FULL_SPEED_USB(Adapter)) ... 多包了一层括号，
+          #    该驱动是第三方老代码，直接对其目录关闭该警告最安全。
+          if [ -f drivers/rtl8188eus/Makefile ]; then
+            if ! grep -q 'Wno-parentheses-equality' drivers/rtl8188eus/Makefile; then
+              cat >> drivers/rtl8188eus/Makefile <<'EOF'
+
+          # Third-party rtl8188eus driver: silence clang's -Werror=parentheses-equality
+          subdir-ccflags-y += -Wno-parentheses-equality
+          subdir-ccflags-y += -Wno-error=parentheses-equality
+          EOF
+              echo "rtl8188eus: appended -Wno-parentheses-equality to Makefile"
+            else
+              echo "rtl8188eus: -Wno-parentheses-equality already present"
+            fi
+          else
+            echo "rtl8188eus: Makefile not found, skip warning suppression"
+          fi
         env:
           KERNEL_DIR: ${{ github.workspace }}/device_kernel
           ARCH: arm64
@@ -153,11 +179,112 @@ jobs:
         uses: ./.github/workflows/build-process
 
       - name: 🔌 Build USB/IP modules and userspace tools
-        run: bash "$GITHUB_WORKSPACE/Patches/usbip.sh"
+        run: |
+          set -euo pipefail
+
+          KERNEL_DIR=${KERNEL_DIR:?KERNEL_DIR must be set}
+          ROOT=${GITHUB_WORKSPACE:-$(cd "${KERNEL_DIR}/.." && pwd)}
+          ARCH=${ARCH:-arm64}
+
+          # ========== 设置 QEMU 用户态支持 (用于 arm64 容器) ==========
+          sudo apt-get update
+          sudo apt-get install -y qemu-user-static binfmt-support
+          docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
+
+          # ========== 编译 USB/IP 内核模块（可选） ==========
+          cd "$KERNEL_DIR"
+          export SHELL=/bin/bash
+          export PATH="${CLANG_PATH:-}:${PATH}"
+          make -j"$(nproc)" \
+            SHELL=/bin/bash \
+            ARCH=arm64 \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            O=out \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            LD=ld.lld \
+            M=drivers/usb/usbip \
+            modules || echo "Warning: USB/IP modules build skipped or failed."
+
+          mkdir -p "$ROOT/usbip-out/modules"
+          if ls out/drivers/usb/usbip/*.ko 1> /dev/null 2>&1; then
+              cp out/drivers/usb/usbip/*.ko "$ROOT/usbip-out/modules/"
+          else
+              echo "No USB/IP kernel modules generated (probably built-in)."
+          fi
+
+          # ========== 编译 USB/IP 用户态工具 (Docker arm64 容器) ==========
+          mkdir -p "$ROOT/usbip-out/bin" "$ROOT/usbip-out/libs"
+          kernel_rel="${KERNEL_DIR#"$ROOT"/}"
+          [ "$kernel_rel" = "$KERNEL_DIR" ] && kernel_rel="$(basename "$KERNEL_DIR")"
+
+          docker run --rm --platform linux/arm64 \
+            --memory=3g \
+            -v "$ROOT:/workspace" \
+            -v "$ROOT/usbip-out:/output" \
+            -w "/workspace/$kernel_rel" \
+            arm64v8/ubuntu:22.04 \
+            bash -c "
+              set -e
+              export DEBIAN_FRONTEND=noninteractive
+              ulimit -s unlimited
+              apt update
+              apt install -y \
+                build-essential \
+                autoconf \
+                libtool \
+                pkg-config \
+                libudev-dev \
+                libssl-dev \
+                flex \
+                bison \
+                file \
+                patchelf
+              cd tools/usb/usbip
+              ./autogen.sh
+              ./configure CFLAGS=\"-Wno-error -Wno-error=stringop-truncation\" --with-tcp-wrappers=no
+              make -j1
+              cp src/.libs/usbip /output/bin/
+              cp src/.libs/usbipd /output/bin/
+              cp libsrc/.libs/libusbip.so.0* /output/libs/
+              cd /output
+              BINARIES=\"bin/usbip bin/usbipd libs/libusbip.so.0*\"
+              DEPS=\"\"
+              for file in \$BINARIES; do
+                if [ -f \"\$file\" ]; then
+                  needed=\$(readelf -d \"\$file\" | grep NEEDED | awk '{print \$5}' | tr -d '[]' || true)
+                  for lib in \$needed; do
+                    if [[ \"\$DEPS\" != *\"\$lib\"* ]]; then
+                      DEPS=\"\$DEPS \$lib\"
+                    fi
+                  done
+                fi
+              done
+              for lib in \$(echo \$DEPS | tr ' ' '\\n' | sort -u); do
+                libpath=\$(ldconfig -p | grep \"\$lib (\" | head -1 | awk '{print \$NF}' || true)
+                if [ -z \"\$libpath\" ]; then
+                  libpath=\$(find /lib /usr/lib -name \"\$lib\" -type f 2>/dev/null | head -1 || true)
+                fi
+                if [ -n \"\$libpath\" ]; then
+                  cp -P \"\$libpath\" libs/ 2>/dev/null || cp \"\$libpath\" libs/
+                  for reallib in \$(find \"\$(dirname \"\$libpath\")\" -name \"\${lib%.so*}*\" -type f 2>/dev/null); do
+                    cp -n \"\$reallib\" libs/ 2>/dev/null || true
+                  done
+                fi
+              done
+              ld_linux=\"/lib/ld-linux-aarch64.so.1\"
+              if [ -f \"\$ld_linux\" ]; then
+                cp -P \"\$ld_linux\" libs/
+              fi
+            "
+
+          # ========== 打包 USB/IP 产物 ==========
+          cd "$ROOT/usbip-out"
+          tar czf "$ROOT/usbip-arm64-bundle.tar.gz" .
         env:
           KERNEL_DIR: ${{ github.workspace }}/device_kernel
           ARCH: arm64
-          
+
       - name: 🔩 Pack Process
         uses: ./.github/workflows/pack-process
 
@@ -220,7 +347,7 @@ jobs:
           name: boot${{ env.LOCALVERSION }}${{ env.UPLOADNAME }}-${{ env.DEVICE }}-${{ env.BUILD_TIME }}
           path: ${{ github.workspace }}/boot.img
           if-no-files-found: error
-          
+
       - name: Upload kernel image
         if: env.UPLOAD_KERNEL_IMAGE == 'true'
         uses: actions/upload-artifact@v4
