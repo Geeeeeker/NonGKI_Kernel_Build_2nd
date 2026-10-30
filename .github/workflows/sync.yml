@@ -107,14 +107,14 @@ jobs:
       - name: ⏰ Checkout repository
         uses: actions/checkout@v6
 
-      - name: 🔑 Validate SYNC_PAT
+      - name: 🔑 Validate SYNC_REPO
         run: |
           set -euo pipefail
-          TOKEN="${{ secrets.vpn }}"
+          TOKEN="${{ secrets.SYNC_REPO }}"
           TARGET_REPO="Geeeeeker/kernel_xiaomi_raphael-pixel"
 
           if [ -z "$TOKEN" ]; then
-            echo "::error::vpn secret is empty or not configured."
+            echo "::error::SYNC_REPO secret is empty or not configured."
             exit 1
           fi
 
@@ -125,7 +125,7 @@ jobs:
             https://api.github.com/user || true)
 
           if [ "$USER_CODE" != "200" ]; then
-            echo "::error::vpn invalid (HTTP $USER_CODE)."
+            echo "::error::SYNC_REPO invalid (HTTP $USER_CODE)."
             cat /tmp/gh_user.json || true
             exit 1
           fi
