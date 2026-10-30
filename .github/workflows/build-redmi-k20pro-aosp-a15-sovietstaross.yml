@@ -183,25 +183,35 @@ jobs:
           path = 'fs/stat.c'
           s = open(path).read()
 
-          # (a) 统一 ksu_handle_stat 声明签名为 const char __user **
-          #     调用处传 &filename（类型 const char __user *），&filename 类型就是 const char __user **
+          # (a) 声明签名统一为 const char __user **，与 &filename 匹配
           s, n_decl = re.subn(
               r'(extern\s+int\s+ksu_handle_stat\s*\(\s*int\s*\*\s*\w+\s*,\s*)struct\s+filename\s*\*\*',
               r'\1const char __user **',
               s
           )
 
-          # (b) 删除所有 ksu_handle_stat 调用行（不动 extern 声明）
-          s, n_calls = re.subn(
-              r'^[ \t]*ksu_handle_stat\([^\n]*\);[ \t]*\n', '', s, flags=re.M
-          )
+          # (b) 把每个 ksu_handle_stat(&dfd, &filename, &flag); 调用改为注释；
+          #     若上一有效行是孤立 "if (...)"（没有 {），也一并注释，避免 if 后无语句
+          lines = s.splitlines(keepends=True)
+          out = []
+          n_calls = 0
+          for line in lines:
+              if re.match(r'^[ \t]*ksu_handle_stat\(&dfd, &filename, &flag\);[ \t]*$', line):
+                  if out:
+                      prev = out[-1]
+                      if re.match(r'^[ \t]*if\s*\([^\n]*\)[ \t]*\n$', prev):
+                          out[-1] = '/* ' + prev.rstrip() + ' (disabled for newfstatat reinsert) */\n'
+                  out.append('/* duplicate ksu_handle_stat disabled */\n')
+                  n_calls += 1
+              else:
+                  out.append(line)
+          s = ''.join(out)
 
-          # (c) 删除孤立的 #endif（patch 阶段重复插入导致的 "#endif without #if"）
+          # (c) 孤儿 #endif（depth 归零时遇到）改为注释，避免 "#endif without #if"
           lines = s.splitlines(keepends=True)
           out = []
           depth = 0
-          n_orphan_endif = 0
-          n_orphan_if = 0
+          n_orphan = 0
           for line in lines:
               st = line.lstrip()
               if st.startswith('#if'):
@@ -212,10 +222,10 @@ jobs:
                       depth -= 1
                       out.append(line)
                   else:
-                      n_orphan_endif += 1
+                      out.append('/* orphan #endif disabled */\n')
+                      n_orphan += 1
               else:
                   out.append(line)
-          # depth > 0 说明有未闭合 #if；这里不处理，交给编译器报错，不静默修改
           s = ''.join(out)
 
           # (d) 在 newfstatat 内、vfs_fstatat 调用之前插入唯一一处调用
@@ -226,17 +236,12 @@ jobs:
           if v < 0:
               raise SystemExit('vfs_fstatat not found after newfstatat')
           line_start = s.rfind('\n', 0, v) + 1
-          call = (
-              '#ifdef CONFIG_KSU_MANUAL_HOOK\n'
-              '\tksu_handle_stat(&dfd, &filename, &flag);\n'
-              '#endif\n'
-          )
-          s = s[:line_start] + call + s[line_start:]
+          s = s[:line_start] + '\tksu_handle_stat(&dfd, &filename, &flag);\n' + s[line_start:]
 
           open(path, 'w').write(s)
-          print(f'fs/stat.c: decl fixed={n_decl}, calls removed={n_calls}, orphan #endif removed={n_orphan_endif}, inserted 1 call')
+          print(f'fs/stat.c: decl fixed={n_decl}, calls disabled={n_calls}, orphan #endif disabled={n_orphan}')
           if depth > 0:
-              print(f'fs/stat.c: warning: {depth} unclosed #if left in file (will fail to compile)')
+              print(f'fs/stat.c: warning: {depth} unclosed #if remaining (check patch stage)')
           PY
         env:
           KERNEL_DIR: ${{ github.workspace }}/device_kernel
