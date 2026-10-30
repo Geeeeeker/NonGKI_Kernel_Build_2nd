@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
-. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 KERNEL_DIR=${KERNEL_DIR:?KERNEL_DIR must be set}
 cd "$KERNEL_DIR"
 
-# 3. 添加 rtl8188eus WiFi 驱动（原样）
+# 添加 rtl8188eus WiFi 驱动（原样）
 git clone --depth=1 --branch master https://github.com/Geeeeeker/android_kernel_xiaomi_sdm845.git rtl8188eus-repo
 if [ -d "rtl8188eus-repo/drivers/rtl8188eus" ]; then
   cp -r rtl8188eus-repo/drivers/rtl8188eus drivers/
