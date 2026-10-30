@@ -107,6 +107,54 @@ jobs:
       - name: ⏰ Checkout repository
         uses: actions/checkout@v6
 
+      - name: 🔑 Validate SYNC_PAT
+        run: |
+          set -euo pipefail
+          TOKEN="${{ secrets.SYNC_PAT }}"
+          TARGET_REPO="Geeeeeker/kernel_xiaomi_raphael-pixel"
+
+          if [ -z "$TOKEN" ]; then
+            echo "::error::SYNC_PAT secret is empty or not configured."
+            exit 1
+          fi
+
+          # 1) 验证 Token 本身有效（GET /user 返回 200 即为有效）
+          USER_CODE=$(curl -sS -o /tmp/gh_user.json -w "%{http_code}" \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/user || true)
+
+          if [ "$USER_CODE" != "200" ]; then
+            echo "::error::SYNC_PAT invalid (HTTP $USER_CODE)."
+            cat /tmp/gh_user.json || true
+            exit 1
+          fi
+
+          LOGIN=$(python3 -c "import json;print(json.load(open('/tmp/gh_user.json')).get('login','?'))")
+          echo "[+] Token valid, authenticated as: $LOGIN"
+
+          # 2) 验证对目标仓库有访问权限
+          REPO_CODE=$(curl -sS -o /tmp/gh_repo.json -w "%{http_code}" \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$TARGET_REPO" || true)
+
+          if [ "$REPO_CODE" != "200" ]; then
+            echo "::error::Cannot access target repo $TARGET_REPO (HTTP $REPO_CODE). Token lacks repo scope."
+            cat /tmp/gh_repo.json || true
+            exit 1
+          fi
+
+          # 3) 验证 Token 对目标仓库拥有 push 权限
+          PUSH_OK=$(python3 -c "import json;print(json.load(open('/tmp/gh_repo.json')).get('permissions',{}).get('push',False))")
+          if [ "$PUSH_OK" != "True" ]; then
+            echo "::error::SYNC_PAT lacks push permission on $TARGET_REPO."
+            python3 -c "import json;print('permissions =', json.load(open('/tmp/gh_repo.json')).get('permissions',{}))"
+            exit 1
+          fi
+
+          echo "[+] Token has push permission to $TARGET_REPO."
+          
       - name: ⌛️ Compilation environment preparation
         uses: ./.github/workflows/build-env
 
