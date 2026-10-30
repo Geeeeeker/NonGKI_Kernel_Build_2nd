@@ -148,7 +148,7 @@ jobs:
           # 3) 验证 Token 对目标仓库拥有 push 权限
           PUSH_OK=$(python3 -c "import json;print(json.load(open('/tmp/gh_repo.json')).get('permissions',{}).get('push',False))")
           if [ "$PUSH_OK" != "True" ]; then
-            echo "::error::SYNC_PAT lacks push permission on $TARGET_REPO."
+            echo "::error::SYNC_REPO lacks push permission on $TARGET_REPO."
             python3 -c "import json;print('permissions =', json.load(open('/tmp/gh_repo.json')).get('permissions',{}))"
             exit 1
           fi
@@ -197,7 +197,7 @@ jobs:
           # 添加（或刷新）指向 fork 的 remote，用 PAT 认证
           git remote remove sync-origin 2>/dev/null || true
           git remote add sync-origin \
-            "https://x-access-token:${{ secrets.vpn }}@github.com/Geeeeeker/kernel_xiaomi_raphael-pixel.git"
+            "https://x-access-token:${{ secrets.SYNC_REPO }}@github.com/Geeeeeker/kernel_xiaomi_raphael-pixel.git"
 
           # 暂存所有改动：补丁结果、用户修改、rtl8188eus 驱动等
           git add -A
