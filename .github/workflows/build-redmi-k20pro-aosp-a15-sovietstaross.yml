@@ -1,4 +1,4 @@
-name: Build Xiaomi Redmi K20 Pro (AOSP Based A15) (Soviet-Star-OSS)
+name: 红米Build Xiaomi Redmi K20 Pro (AOSP Based A15) (Soviet-Star-OSS)
 
 on:
   workflow_call:
@@ -12,8 +12,8 @@ env:
   CUSTOM_CMDS : "CLANG_TRIPLE=aarch64-linux-gnu-"
   EXTRA_CMDS : "LLVM=1 LLVM_IAS=1"
 
-  KERNEL_SOURCE : "https://github.com/JackA1ltman/kernel_xiaomi_raphael_noksu.git"
-  KERNEL_BRANCH : "15.0"
+  KERNEL_SOURCE : "https://github.com/Geeeeeker/android_kernel_xiaomi_sm8150-5.4.git"
+  KERNEL_BRANCH : "MI_RAPHAEL_5.4"
 
   CLANG_SOURCE : "https://raw.githubusercontent.com/Neutron-Toolchains/antman/main/antman"
   CLANG_BRANCH : ""
@@ -38,8 +38,8 @@ env:
   SUSFS_ENABLE : true
   SUSFS_FIXED : true
 
-  AK3_SOURCE : "https://github.com/SOVIET-ANDROID/AnyKernel3.git"
-  AK3_BRANCH : "master"
+  AK3_SOURCE : "https://github.com/erg-raphael-5-4/AnyKernel3.git"
+  AK3_BRANCH : "main"
 
   BOOT_SOURCE : ""
 
