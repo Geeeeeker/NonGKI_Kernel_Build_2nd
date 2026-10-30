@@ -1,4 +1,4 @@
-name: 红米Build Xiaomi Redmi K20 Pro (AOSP Based A16) (Soviet-Star-OSS)
+name: 同步
 
 on:
   workflow_call:
