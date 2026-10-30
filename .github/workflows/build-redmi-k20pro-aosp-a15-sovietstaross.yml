@@ -1,4 +1,4 @@
-name: 红米Build Xiaomi Redmi K20 Pro (AOSP Based A15) (Soviet-Star-OSS)
+name: 红米Build Xiaomi Redmi K20 Pro (AOSP Based A16) (Soviet-Star-OSS)
 
 on:
   workflow_call:
@@ -36,7 +36,7 @@ env:
   KERNELSU_BRANCH : ""
 
   KERNELSU_AUTO_GET : "true"
-  KERNELSU_AUTO_FORK : "bakasu" # xxksu, rsuntk , next, bakasu and sukisu
+  KERNELSU_AUTO_FORK : "sukisu" # xxksu, rsuntk , next, bakasu and sukisu
 
   SUSFS_ENABLE : true
   SUSFS_FIXED : true
@@ -93,7 +93,7 @@ env:
 
 jobs:
   build-kernel:
-    name: Xiaomi Redmi K20 Pro (AOSP Based A17) (kernel 5.4)
+    name: Xiaomi Redmi K20 Pro (AOSP Based A16) (kernel 4.12)
     runs-on: ubuntu-24.04 # u can changed to ubuntu 22.04, and need container set ubuntu-24.04
     # container: archlinux/archlinux:latest # if u need use arch linux -> archlinux/archlinux:latest or ubuntu 20.04 -> ubuntu:focal
     env:
