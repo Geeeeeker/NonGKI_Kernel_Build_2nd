@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 set -euo pipefail
-. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 KERNEL_DIR=${KERNEL_DIR:?KERNEL_DIR must be set}
 ROOT=${GITHUB_WORKSPACE:-$(cd "${KERNEL_DIR}/.." && pwd)}
