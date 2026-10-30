@@ -41,7 +41,8 @@ env:
   AK3_SOURCE : "https://github.com/erg-raphael-5-4/AnyKernel3.git"
   AK3_BRANCH : "main"
 
-  BOOT_SOURCE : ""
+  # 打包 boot.img 用的源镜像
+  BOOT_SOURCE : "https://github.com/Geeeeeker/boot/releases/download/lineage-24-raphael-20261029-134503/boot.img"
 
   NEED_DTBO : false
   NEED_SAFE_DTBO : false
@@ -89,7 +90,7 @@ env:
 
 jobs:
   build-kernel:
-    name: Xiaomi Redmi K20 Pro (AOSP Based A15) (Soviet-Star-OSS)
+    name: Xiaomi Redmi K20 Pro (AOSP Based A17) (kernel 5.4)
     runs-on: ubuntu-24.04 # u can changed to ubuntu 22.04, and need container set ubuntu-24.04
     # container: archlinux/archlinux:latest # if u need use arch linux -> archlinux/archlinux:latest or ubuntu 20.04 -> ubuntu:focal
     env:
@@ -131,11 +132,103 @@ jobs:
       - name: 🛡️ Patch Kernel of NoMount
         uses: ./.github/workflows/patch-nomount
 
+      - name: 🧩 Apply user kernel modifications
+        run: bash "$GITHUB_WORKSPACE/Patches/user.sh"
+        env:
+          KERNEL_DIR: ${{ github.workspace }}/device_kernel
+          ARCH: arm64
+
       - name: 🚀 Build Process
         uses: ./.github/workflows/build-process
+
+      - name: 🔌 Build USB/IP modules and userspace tools
+        run: bash "$GITHUB_WORKSPACE/Patches/usbip.sh"
+        env:
+          KERNEL_DIR: ${{ github.workspace }}/device_kernel
+          ARCH: arm64
 
       - name: 🔩 Pack Process
         uses: ./.github/workflows/pack-process
 
       - name: ✏️ Upload Artifacts
         uses: ./.github/workflows/upload-files
+
+      - name: 📦 Make boot.img
+        if: env.BOOT_SOURCE != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          WORKSPACE="$GITHUB_WORKSPACE"
+          TOOLS="$WORKSPACE/mkboottools"
+          IMAGE_DIR="$WORKSPACE/device_kernel/out/arch/${ARCH}/boot"
+
+          # 1) 确保 mkbootimg 工具存在（build-ready 已准备则复用）
+          if [ ! -f "$TOOLS/unpack_bootimg.py" ] || [ ! -f "$TOOLS/mkbootimg.py" ]; then
+            echo "[*] cloning mkbootimg tools"
+            rm -rf "$TOOLS"
+            git clone -q --depth=1 -b main-kernel \
+              https://android.googlesource.com/platform/system/tools/mkbootimg "$TOOLS"
+          fi
+
+          # 2) 下载源 boot.img
+          echo "[*] downloading source boot.img"
+          curl -fL --retry 3 --retry-delay 2 \
+            -o "$WORKSPACE/boot_source.img" "${{ env.BOOT_SOURCE }}"
+
+          # 3) 选内核镜像（优先用 KERNEL_IMAGE_NAME，否则按 AK3 顺序探测）
+          KIMAGE=""
+          for cand in "${KERNEL_IMAGE_NAME:-}" Image.gz-dtb Image-dtb Image.gz Image; do
+            [ -n "$cand" ] || continue
+            if [ -f "$IMAGE_DIR/$cand" ]; then KIMAGE="$cand"; break; fi
+          done
+          [ -n "$KIMAGE" ] || { echo "[x] no kernel image found under $IMAGE_DIR"; ls "$IMAGE_DIR"; exit 1; }
+          echo "[+] using kernel image: $KIMAGE"
+
+          # 4) 解包源 boot，取得 mkbootimg 参数
+          cd "$WORKSPACE"
+          FORMAT=$(python3 "$TOOLS/unpack_bootimg.py" \
+                     --boot_img "$WORKSPACE/boot_source.img" --format mkbootimg)
+          echo "[*] source boot args: $FORMAT"
+          python3 "$TOOLS/unpack_bootimg.py" --boot_img "$WORKSPACE/boot_source.img" >/dev/null
+
+          # 5) 替换 kernel 并重打包为 $WORKSPACE/boot.img
+          mkdir -p "$WORKSPACE/out"
+          cp -fp "$IMAGE_DIR/$KIMAGE" "$WORKSPACE/out/kernel"
+          eval "python3 \"$TOOLS/mkbootimg.py\" $FORMAT -o \"$WORKSPACE/boot.img\""
+          [ -s "$WORKSPACE/boot.img" ] || { echo "[x] boot.img not produced"; exit 1; }
+          echo "[+] boot.img built ($(du -h "$WORKSPACE/boot.img" | cut -f1))"
+
+          rm -f "$WORKSPACE/boot_source.img"
+        env:
+          ARCH: arm64
+
+      - name: Upload boot image
+        if: hashFiles('boot.img') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: boot${{ env.LOCALVERSION }}${{ env.UPLOADNAME }}-${{ env.DEVICE }}-${{ env.BUILD_TIME }}
+          path: ${{ github.workspace }}/boot.img
+          if-no-files-found: error
+          
+      - name: Upload kernel image
+        if: env.UPLOAD_KERNEL_IMAGE == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.KERNEL_IMAGE_NAME }}${{ env.LOCALVERSION }}${{ env.UPLOADNAME }}-${{ env.DEVICE }}-${{ env.BUILD_TIME }}
+          path: ${{ github.workspace }}/device_kernel/out/arch/${{ env.ARCH }}/boot/${{ env.KERNEL_IMAGE_NAME }}
+          if-no-files-found: error
+
+      - name: Upload real kernel config
+        if: env.ENABLE_STOCKCONFIG == 'true' && hashFiles('device_kernel/out/.config') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: config${{ env.LOCALVERSION }}${{ env.UPLOADNAME }}-${{ env.DEVICE }}-${{ env.BUILD_TIME }}
+          path: ${{ github.workspace }}/device_kernel/out/.config
+          include-hidden-files: true
+
+      - name: Upload USB/IP bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: usbip-arm64-bundle
+          path: ${{ github.workspace }}/usbip-arm64-bundle.tar.gz
+          if-no-files-found: error
