@@ -113,11 +113,53 @@ jobs:
       - name: 🔗 Patch for no-kprobe
         uses: ./.github/workflows/patch-no-kprobe
 
-      - name: 🪛 Extra Kernel Options
+      - name: 🪛 Extra Kernel Options (KSU Symbol Fix)
         run: |
-          # Only ${{ env.DEVICE_NAME }} use it.
           cd $GITHUB_WORKSPACE/device_kernel
-          # Nothing
+
+          # --- 修复 ksu_handle_prctl 未定义符号问题 ---
+          # 1. 强制确保 KernelSU 的 core_hook.c 参与编译
+          KSU_MAKEFILE=$(find . -path "*/KernelSU/kernel/Makefile" -o -path "*/KernelSU-Next/kernel/Makefile" | head -n 1)
+          if [ -f "$KSU_MAKEFILE" ]; then
+            echo "[FIX] 找到 KernelSU Makefile: $KSU_MAKEFILE"
+            if ! grep -q "core_hook.o" "$KSU_MAKEFILE"; then
+              echo "[FIX] 强制添加 core_hook.o 到 Makefile"
+              echo "obj-y += core_hook.o" >> "$KSU_MAKEFILE"
+            fi
+            # 确保 prctl 相关钩子文件也被编译
+            if ! grep -q "prctl.o" "$KSU_MAKEFILE"; then
+              echo "obj-y += prctl.o" >> "$KSU_MAKEFILE"
+            fi
+          else
+            echo "[WARN] 未找到 KernelSU 的 Makefile，检查是否自动集成成功"
+          fi
+
+          # 2. 在 security/security.c 中为 ksu_handle_prctl 调用添加 CONFIG_KSU 保护
+          SECURITY_FILE="security/security.c"
+          if [ -f "$SECURITY_FILE" ] && grep -q "ksu_handle_prctl" "$SECURITY_FILE"; then
+            echo "[FIX] 在 $SECURITY_FILE 中发现直接调用 ksu_handle_prctl，添加条件编译保护"
+            # 如果调用行还没有 #ifdef CONFIG_KSU 包裹，则自动插入
+            if ! grep -B2 "ksu_handle_prctl" "$SECURITY_FILE" | grep -q "CONFIG_KSU"; then
+              sed -i '/ksu_handle_prctl/i #ifdef CONFIG_KSU' "$SECURITY_FILE"
+              sed -i '/ksu_handle_prctl/a #endif' "$SECURITY_FILE"
+            fi
+          fi
+
+          # 3. 如果使用 bakasu fork 且 setup 脚本存在，手动触发一次集成
+          KSU_SETUP=$(find . -name "setup.sh" -path "*KernelSU*" | head -n 1)
+          if [ -n "$KSU_SETUP" ] && [ "${{ env.KERNELSU_AUTO_GET }}" = "true" ]; then
+            echo "[FIX] 检测到 KernelSU setup.sh，手动执行以确保钩子注入完整"
+            # 注意：根据 bakasu 的实际情况，参数可能需要调整
+            bash "$KSU_SETUP" legacy || true
+          fi
+
+          # 4. 检查 CONFIG_KSU 是否在 .config 中启用
+          if [ -f ".config" ]; then
+            if ! grep -q "CONFIG_KSU=y" .config; then
+              echo "[FIX] 强制启用 CONFIG_KSU"
+              echo "CONFIG_KSU=y" >> .config
+            fi
+          fi
 
       - name: 🧰 Patch Kernel of Re:Kernel
         uses: ./.github/workflows/patch-rekernel
