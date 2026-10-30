@@ -140,7 +140,7 @@ jobs:
           set -euo pipefail
           cd "$GITHUB_WORKSPACE/device_kernel"
 
-          # ---------- rtl8188eus WiFi driver ----------
+          # 添加 rtl8188eus WiFi 驱动（原样）
           git clone --depth=1 --branch master https://github.com/Geeeeeker/android_kernel_xiaomi_sdm845.git rtl8188eus-repo
           if [ -d "rtl8188eus-repo/drivers/rtl8188eus" ]; then
             cp -r rtl8188eus-repo/drivers/rtl8188eus drivers/
@@ -153,6 +153,9 @@ jobs:
           fi
           rm -rf rtl8188eus-repo
 
+          # 4. 修复 rtl8188eus 在 clang -Werror 下触发的 -Wparentheses-equality
+          #    原因：usb_halinit.c 里 if ((IS_FULL_SPEED_USB(Adapter)) ... 多包了一层括号，
+          #    该驱动是第三方老代码，直接对其目录关闭该警告最安全。
           if [ -f drivers/rtl8188eus/Makefile ]; then
             if ! grep -q 'Wno-parentheses-equality' drivers/rtl8188eus/Makefile; then
               cat >> drivers/rtl8188eus/Makefile <<'EOF'
@@ -169,38 +172,53 @@ jobs:
             echo "rtl8188eus: Makefile not found, skip warning suppression"
           fi
 
-          # ---------- 1. fair.c：注释掉缺失的 se_update_runnable 调用 ----------
+          # ---------- Android 16 专用修复 ----------
+          # 1. 修复 fair.c 缺失的 se_update_runnable 调用（保持你验证过的原样）
           sed -i '/se_update_runnable(se);/s/^/\/\//' kernel/sched/fair.c
 
-          # ---------- 2. fs/stat.c：去重 ksu_handle_stat，只在 newfstatat 保留一处 ----------
+          # 2. 清理 fs/stat.c 里被重复插入的 ksu_handle_stat，只在 newfstatat 里保留一处
           python3 - <<'PY'
           import re
 
           path = 'fs/stat.c'
           s = open(path).read()
 
-          # 1) 声明签名统一为 const char __user **，与调用 &filename 匹配
+          # (a) 统一 ksu_handle_stat 声明签名为 const char __user **
+          #     调用处传 &filename（类型 const char __user *），&filename 类型就是 const char __user **
           s, n_decl = re.subn(
               r'(extern\s+int\s+ksu_handle_stat\s*\(\s*int\s*\*\s*\w+\s*,\s*)struct\s+filename\s*\*\*',
               r'\1const char __user **',
               s
           )
 
-          # 2) 删除所有“仅包裹 ksu_handle_stat 调用”的 #ifdef/#endif 块（连同空壳）
-          block = re.compile(
-              r'[ \t]*#if(?:def[ \t]+CONFIG_KSU\w*| defined\(CONFIG_KSU[^\n]*\))[^\n]*\n'
-              r'(?:[ \t]*(?://[^\n]*)?\n)*?'
-              r'[ \t]*ksu_handle_stat\([^\n]*\);[ \t]*\n'
-              r'(?:[ \t]*(?://[^\n]*)?\n)*?'
-              r'[ \t]*#endif[^\n]*\n',
-              re.M
+          # (b) 删除所有 ksu_handle_stat 调用行（不动 extern 声明）
+          s, n_calls = re.subn(
+              r'^[ \t]*ksu_handle_stat\([^\n]*\);[ \t]*\n', '', s, flags=re.M
           )
-          s, n_blocks = block.subn('', s)
 
-          # 3) 删除任何剩余的裸调用行
-          s, n_bare = re.subn(r'^[ \t]*ksu_handle_stat\([^\n]*\);[ \t]*\n', '', s, flags=re.M)
+          # (c) 删除孤立的 #endif（patch 阶段重复插入导致的 "#endif without #if"）
+          lines = s.splitlines(keepends=True)
+          out = []
+          depth = 0
+          n_orphan_endif = 0
+          n_orphan_if = 0
+          for line in lines:
+              st = line.lstrip()
+              if st.startswith('#if'):
+                  depth += 1
+                  out.append(line)
+              elif st.startswith('#endif'):
+                  if depth > 0:
+                      depth -= 1
+                      out.append(line)
+                  else:
+                      n_orphan_endif += 1
+              else:
+                  out.append(line)
+          # depth > 0 说明有未闭合 #if；这里不处理，交给编译器报错，不静默修改
+          s = ''.join(out)
 
-          # 4) 在 newfstatat 内、vfs_fstatat 之前插入一处（带 #ifdef 包裹）
+          # (d) 在 newfstatat 内、vfs_fstatat 调用之前插入唯一一处调用
           m = re.search(r'SYSCALL_DEFINE4\(newfstatat,', s)
           if not m:
               raise SystemExit('newfstatat not found in fs/stat.c')
@@ -215,21 +233,10 @@ jobs:
           )
           s = s[:line_start] + call + s[line_start:]
 
-          # 5) 校验 #if/#endif 平衡，不平衡直接报行号
-          depth = 0
-          for i, line in enumerate(s.splitlines(), 1):
-              st = line.lstrip()
-              if st.startswith('#if'):
-                  depth += 1
-              elif st.startswith('#endif'):
-                  depth -= 1
-                  if depth < 0:
-                      raise SystemExit(f'fs/stat.c: unbalanced #endif at line {i}')
-          if depth != 0:
-              raise SystemExit(f'fs/stat.c: {depth} unclosed #if block(s) at EOF')
-
           open(path, 'w').write(s)
-          print(f'fs/stat.c: decl fixed={n_decl}, wrapped blocks removed={n_blocks}, bare calls removed={n_bare}, inserted 1 call')
+          print(f'fs/stat.c: decl fixed={n_decl}, calls removed={n_calls}, orphan #endif removed={n_orphan_endif}, inserted 1 call')
+          if depth > 0:
+              print(f'fs/stat.c: warning: {depth} unclosed #if left in file (will fail to compile)')
           PY
         env:
           KERNEL_DIR: ${{ github.workspace }}/device_kernel
