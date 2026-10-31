@@ -1,4 +1,4 @@
-name: 编译Build Xiaomi Redmi K20 Pro (AOSP Based A16)
+name: 编译内核Build Xiaomi Redmi K20 Pro (AOSP Based A16)
 
 on:
   workflow_call:
