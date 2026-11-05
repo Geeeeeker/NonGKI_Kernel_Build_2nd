@@ -12,10 +12,10 @@ env:
   CUSTOM_CMDS : "CLANG_TRIPLE=aarch64-linux-gnu-"
   EXTRA_CMDS : "LLVM=1 LLVM_IAS=1"
 
-  #KERNEL_SOURCE : "https://github.com/duckyduckG/android_kernel_xiaomi_sdm845_419.git"
-  #KERNEL_BRANCH : "lineage-23.2_xiaomi"
-  KERNEL_SOURCE : "https://github.com/Geeeeeker/android_kernel_xiaomi_sdm845.git"
-  KERNEL_BRANCH : "lineage-18.1"
+  KERNEL_SOURCE : "https://github.com/duckyduckG/android_kernel_xiaomi_sdm845_419.git"
+  KERNEL_BRANCH : "lineage-23.2_xiaomi"
+  #KERNEL_SOURCE : "https://github.com/Geeeeeker/android_kernel_xiaomi_sdm845.git"
+  #KERNEL_BRANCH : "lineage-18.1"
 
   CLANG_SOURCE : "https://github.com/Geeeeeker/boot/releases/download/clang-prebuilts-20260328-025154/clang-r383902b_android11.tar.xz"
   CLANG_BRANCH : ""
