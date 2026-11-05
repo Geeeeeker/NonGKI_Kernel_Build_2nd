@@ -1,4 +1,4 @@
-name: Build Xiaomi Mi MIX 2S (AOSP Based A11) (Kernel 4.19)
+name: 编译Build Xiaomi Mi MIX 2S (AOSP Based A11) (Kernel 4.19)
 
 on:
   workflow_call:
